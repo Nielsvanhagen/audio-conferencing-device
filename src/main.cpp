@@ -9,7 +9,7 @@
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #include "driver/i2s.h"
 
-//error type
+//error typee
 esp_err_t err;
 
 //buffers
