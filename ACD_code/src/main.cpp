@@ -120,9 +120,27 @@ void sampleAudio( void * parameter )
           vTaskDelete(NULL);
         }    
         i2s_pop_sample(I2S_PORT, (char *)&sample,10);
+        //i2s_write_bytes(I2S_PORT, (const char*)&sample, sizeof(uint32_t), 0);
         sample>>=14;
         sample16 = (int16_t)sample;
-        xQueueSend(queueSample, &sample16, 10);      
+        xQueueSend(queueSample, &sample16, 10);     
+        //xQueueSend(queueSample, &sample, 10);    
+      }
+      vTaskDelete( NULL ); 
+}
+
+void receiveUDP( void * parameter )
+{     
+      unsigned char packetBuffer[1440]; //buffer to hold incoming packet,
+      while ( true ){  
+        if(CALL_TASK == false){
+          vTaskDelete(NULL);
+        }    
+        udp.parsePacket();
+        udp.read(packetBuffer,1024);
+        size_t bytes_written;
+        i2s_write((i2s_port_t)0, packetBuffer, sizeof(packetBuffer), &bytes_written, portMAX_DELAY);
+        //i2s_write((i2s_port_t)0, samples_data, ((bits+8)/16)*SAMPLE_PER_CYCLE*4, &i2s_bytes_write, 100);
       }
       vTaskDelete( NULL ); 
 }
@@ -139,7 +157,11 @@ void Task1code( void * pvParameters ){
     udp.beginPacket(udpAddress, udpPort);        
       for(sample_counter=0; sample_counter<MTU/2; sample_counter++){         
         xQueueReceive(queueSample, &element, portMAX_DELAY);
-        udp.write((byte*)&element,2);          
+        // int32_t sampletx = (int32_t)element;
+        // sampletx<<=14;
+        //i2s_write_bytes(I2S_PORT, (const char*)&sampletx, sizeof(uint32_t), 0);
+        //Serial.println(element);
+        udp.write((byte*)&element,2);     
       }        
     udp.endPacket(); 
   }
@@ -161,6 +183,14 @@ void loop() {
             if(queueSample == NULL){      
           Serial.println("Error creating the queue");   
           }   
+          xTaskCreate(
+                    receiveUDP,          /* Task function. */
+                    "receiveUDP",        /* String with name of task. */
+                    10000,            /* Stack size in words. */
+                    NULL,             /* Parameter passed as input of the task */
+                    1,                /* Priority of the task. */
+                    NULL);            /* Task handle. */
+
           xTaskCreate(
                     sampleAudio,          /* Task function. */
                     "SampleAudio",        /* String with name of task. */
