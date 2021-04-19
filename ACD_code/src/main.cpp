@@ -6,18 +6,25 @@
 
 #include "screen_lib.h"
 
+
+#include <WiFiUdp.h>
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_system.h"
+#include <math.h>
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #include "driver/i2s.h"
 
-//error typee
-esp_err_t err;
+// //error typee
+// esp_err_t err;
 
-//buffers
-int rxbuf[256], txbuf[256];
-float l_in[128], r_in[128];
-float l_out[128], r_out[128];
+// //buffers
+// int rxbuf[256], txbuf[256];
+// float l_in[128], r_in[128];
+// float l_out[128], r_out[128];
 
-char pktbuf1[10];
+// char pktbuf1[10];
 
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -32,6 +39,29 @@ bool MUTE_AMP;
 #define PIN_MUTE_MIC 16
 #define PIN_MUTE_AMP 17
 
+//++++++++++++++++++++++++++++++++++++++++
+//I2s buffers
+#define SERIAL_BAUD 115200
+#define SAMPLE_RATE 16000
+#define MTU 1440
+
+int16_t sample16 = 0;
+int32_t sample = 0;
+int16_t element = 0;
+int sample_counter = 0;
+
+//++++++++++++++++++++++++++++++++++++++++
+//UDP settings
+const char * udpAddress = "192.168.178.15"; //ip pc
+const int udpPort = 3333;
+boolean transmit = false;
+QueueHandle_t queueSample;
+int queueSize = SAMPLE_RATE * 2;
+const i2s_port_t I2S_PORT = I2S_NUM_0;
+//create UDP instance
+WiFiUDP udp;
+//++++++++++++++++++++++++++++++++++++++++
+
 void setup(void) {
   Serial.begin(115200);
   REG_WRITE(PIN_CTRL, 0xFF0); 
@@ -43,95 +73,75 @@ void setup(void) {
   pinMode(PIN_MUTE_MIC, OUTPUT);
   pinMode(PIN_MUTE_AMP, OUTPUT);
 
-  i2s_config_t i2s_config = {
+ Serial.println("Configuring I2S...");
+  // The I2S config as per the example
+  esp_err_t err;
+ const  i2s_config_t i2s_config = {
+    .mode = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_TX  | I2S_MODE_RX), // Receive, not transfer
+    .sample_rate = 16000,                         // 16KHz
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT, // could only get it to work with 32bits
+    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT, // although the SEL config should be left, it seems to transmit on right
+    .communication_format = i2s_comm_format_t(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB),
+    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,     // Interrupt level 1
+    .dma_buf_count = 32,                           // number of buffers
+    .dma_buf_len = 64,
+    .use_apll = true
+  };
+  // The pin config as per the setup
+  const i2s_pin_config_t pin_config = {
+    .bck_io_num = 27,   // BCKL
+    .ws_io_num = 26,    // LRCL
+    .data_out_num = 25, // not used (only for speakers)
+    .data_in_num = 33   // DOUT
+  };
+  err = i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
+  if (err != ESP_OK) {
+    Serial.printf("Failed installing driver: %d\n", err);
+    while (true);
+  }
+  err = i2s_set_pin(I2S_PORT, &pin_config);
+  if (err != ESP_OK) {
+    Serial.printf("Failed setting pin: %d\n", err);
+    while (true);
+  }  
 
-        .mode                 = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_TX  | I2S_MODE_RX), // i2s_mode_t             work mode
-        .sample_rate          = 44100,                                                    // int                    sample rate
-        .bits_per_sample      = I2S_BITS_PER_SAMPLE_32BIT,                                // i2s_bits_per_sample_t  bits per sample
-        .channel_format       = I2S_CHANNEL_FMT_ONLY_LEFT,                                     // i2s_channel_fmt_t      channel format
-        .communication_format = I2S_COMM_FORMAT_I2S_MSB,                                  // i2s_comm_format_t      communication format
-        .intr_alloc_flags     = 0,                                                        // int                    Flags used to allocate the interrupt. One or multiple (ORred) ESP_INTR_FLAG_* values. See esp_intr_alloc.h for more info
-        .dma_buf_count        = 6,                                                        // int                    DMA Buffer Count
-        .dma_buf_len          = 512,                                                      // int                    DMA Buffer Length
-        .use_apll             = true,                                                     // bool                   using APLL as main clock, enable it to get accurate clock
-        .tx_desc_auto_clear   = true,                                                     // bool                   auto clear tx descriptor if there is underflow condition (helps in avoiding noise in case of data unavailability)
-        .fixed_mclk           = true                                                      // int                    using fixed MCLK output. If use_apll = true and fixed_mclk > 0, then the clock output for is fixed and equal to the fixed_mclk value
-                                             
-    };
-
-    err = i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
-    if (err != ESP_OK) {
-       Serial.print("Failed installing driver: ");
-       Serial.print(err);
-       while (true);
-     }
-//------------------------------------------------------------
-
-    i2s_pin_config_t pin_config = {
-        .bck_io_num   = 27,
-        .ws_io_num    = 26,
-        .data_out_num = 25,
-        .data_in_num  = 33                                                       
-    };
-
-   err = i2s_set_pin(I2S_NUM_0, &pin_config);
-   if (err != ESP_OK) {
-      Serial.print("Failed setting pin: ");
-      Serial.print(err);
-      while (true);
-   }
-
-   Serial.println("I2S driver installed.");
+  Serial.println("I2S driver installed.");
 
   tft.init();
   tft.setRotation(1);
   main_layout();
 }
 
-//Task1code: runs thinger.io loop, 1 core dedicated to communications
+//Sample audio task: core 0/ core 1
+void sampleAudio( void * parameter )
+{      
+      while ( true ){  
+        if(CALL_TASK == false){
+          vTaskDelete(NULL);
+        }    
+        i2s_pop_sample(I2S_PORT, (char *)&sample,10);
+        sample>>=14;
+        sample16 = (int16_t)sample;
+        xQueueSend(queueSample, &sample16, 10);      
+      }
+      vTaskDelete( NULL ); 
+}
+
+//Task1code: core 0 
 void Task1code( void * pvParameters ){
-  Serial.print("Thinger.io running on core ");
-  Serial.println(xPortGetCoreID());
+  // Serial.print("Thinger.io running on core ");
+  // Serial.println(xPortGetCoreID());
 
   for(;;){
     if(CALL_TASK == false){
       vTaskDelete(NULL);
     }
-    size_t readsize = 0;
-    //read 256 samples (128 stereo samples)
-    esp_err_t rxfb = i2s_read(I2S_NUM_0,&rxbuf[0],256*4, &readsize, 1000);
-    if (rxfb == ESP_OK && readsize==256*4) {
-    
-      //extract stereo samples to mono buffers
-      int y=0;
-      for (int i=0; i<256; i=i+2) {
-        l_in[y] = (float) rxbuf[i];
-        r_in[y] = (float) rxbuf[i+1];
-        y++;
-      }
-      
-      
-      //do something with your left + right channel samples here in the buffers l_in/r_in and ouput result to l_out and r_out (e.g. build mono sum and apply -6dB gain (*0.5)
-      
-      for (int i=0; i<128; i++) {
-      
-        l_out[i] = 0.5f * (l_in[i] + r_in[i]);
-        r_out[i] = l_out[i];
-        
-      
-      }
-      
-      
-      //merge two l and r buffers into a mixed buffer and write back to HW
-      y=0;
-      for (int i=0;i<128;i++) {
-      txbuf[y] = (int) l_out[i];
-      txbuf[y+1] = (int) r_out[i];
-      y=y+2;
-      }
-    
-      i2s_write(I2S_NUM_0, &txbuf[0],256*4, &readsize, 1000);
-    } 
+    udp.beginPacket(udpAddress, udpPort);        
+      for(sample_counter=0; sample_counter<MTU/2; sample_counter++){         
+        xQueueReceive(queueSample, &element, portMAX_DELAY);
+        udp.write((byte*)&element,2);          
+      }        
+    udp.endPacket(); 
   }
 }
 
@@ -147,6 +157,18 @@ void loop() {
           open_call();
           MUTE_MIC = false;
           CALL_TASK = true;
+          queueSample = xQueueCreate( queueSize, sizeof( int16_t ) );   
+            if(queueSample == NULL){      
+          Serial.println("Error creating the queue");   
+          }   
+          xTaskCreate(
+                    sampleAudio,          /* Task function. */
+                    "SampleAudio",        /* String with name of task. */
+                    10000,            /* Stack size in words. */
+                    NULL,             /* Parameter passed as input of the task */
+                    1,                /* Priority of the task. */
+                    NULL);            /* Task handle. */
+
           xTaskCreatePinnedToCore(
                     Task1code,   /* Task function. */
                     "Task1",     /* name of task. */
