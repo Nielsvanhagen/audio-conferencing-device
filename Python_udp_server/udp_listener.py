@@ -2,14 +2,16 @@ import pyaudio
 import socket
 import struct
 
-UDP_IP = "192.168.178.15"
+#udp settings
+UDP_IP = "x.x.x.x"
 UDP_PORT = 3333
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind((UDP_IP, UDP_PORT))
 
+#pyaudio settings
 p = pyaudio.PyAudio()
-FORMAT = pyaudio.paInt16
+FORMAT = pyaudio.paInt16 #sample bit
 CHANNELS = 1
 RATE = 16000
 CHUNK = 1024
@@ -22,9 +24,9 @@ try:
         data, addr = sock.recvfrom(CHUNK*2) # buffer de 1024 bytes
         # for i in range(0,len(data)):
         #     print(data[i])
-        #stream.write(data)
+        stream.write(data) #stream to speakers (pc)
         # print(data)
-        sock.sendto(data, addr)
+        # sock.sendto(data, addr)
         
 except KeyboardInterrupt:  
     print("Stop streaming")
